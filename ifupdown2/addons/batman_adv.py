@@ -47,6 +47,24 @@ class batman_adv(Addon, moduleBase):
                 'help': 'Interfaces to ignore when verifying configuration (regexp)',
                 'required': False,
             },
+            'batman-ap-isolation': {
+                'help': 'B.A.T.M.A.N. access point isolation',
+                'validvals': ['enabled', 'disabled'],
+                'required': False,
+                'batman-attr': True,
+            },
+            'batman-bonding': {
+                'help': 'B.A.T.M.A.N. bonding mode',
+                'validvals': ['enabled', 'disabled'],
+                'required': False,
+                'batman-attr': True,
+            },
+            'batman-bridge-loop-avoidance': {
+                'help': 'B.A.T.M.A.N. bridge loop avoidance',
+                'validvals': ['enabled', 'disabled'],
+                'required': False,
+                'batman-attr': True,
+            },
             'batman-distributed-arp-table': {
                 'help': 'B.A.T.M.A.N. distributed ARP table',
                 'validvals': ['enabled', 'disabled'],
@@ -55,13 +73,19 @@ class batman_adv(Addon, moduleBase):
             },
             'batman-gw-mode': {
                 'help': 'B.A.T.M.A.N. gateway mode',
-                'validvals': ['off', 'client', 'server'],
+                'validvals': ['off', 'client <number>', 'server <number>'],
                 'required': False,
                 'example': ['batman-gw-mode client'],
                 'batman-attr': True,
             },
             'batman-hop-penalty': {
                 'help': 'B.A.T.M.A.N. hop penalty',
+                'validvals': ['<number>'],
+                'required': False,
+                'batman-attr': True,
+            },
+            'batman-orig-interval': {
+                'help': 'B.A.T.M.A.N. originator interval',
                 'validvals': ['<number>'],
                 'required': False,
                 'batman-attr': True,
@@ -75,6 +99,7 @@ class batman_adv(Addon, moduleBase):
             'batman-routing-algo': {
                 'help': 'B.A.T.M.A.N. routing algo',
                 'validvals': ['BATMAN_IV', 'BATMAN_V'],
+                'default': 'BATMAN_IV',
                 'required': False,
                 'batman-attr': False,
             },
@@ -96,7 +121,7 @@ class batman_adv(Addon, moduleBase):
 
             attr = longname.replace ("batman-", "")
             self._batman_attrs[attr] = {
-                 'filename' : attr.replace ("-", "_"),
+                 'name' : attr.replace ("-", "_"),
             }
 
     def _is_batman_device (self, ifaceobj):
@@ -126,44 +151,49 @@ class batman_adv(Addon, moduleBase):
 
         return None
 
-    def _read_current_batman_attr (self, ifaceobj, attr, dont_map = False):
-	# 'routing_algo' needs special handling, D'oh.
-        if dont_map:
-            attr_file_path = "/sys/class/net/%s/mesh/%s" % (ifaceobj.name, attr)
-        else:
-            if attr not in self._batman_attrs:
-                raise ValueError ("_read_current_batman_attr: Invalid or unsupported B.A.T.M.A.N. adv. attribute: %s" % attr)
+    def _read_current_batman_attr (self, ifaceobj, attr):
+        if attr not in self._batman_attrs:
+            raise ValueError ("_read_current_batman_attr: Invalid or unsupported B.A.T.M.A.N. adv. attribute: %s" % attr)
 
-            attr_file_name = self._batman_attrs[attr]['filename']
-            attr_file_path = "/sys/class/net/%s/mesh/%s" % (ifaceobj.name, attr_file_name)
+        attr_name = self._batman_attrs[attr]['name']
 
         try:
-            return self.read_file_oneline(attr_file_path)
-        except IOError as i:
-            raise Exception ("_read_current_batman_attr (%s) %s" % (attr, i))
+            self.logger.debug ("Running batctl meshif %s %s" % (ifaceobj.name, attr_name))
+            batctl_output = subprocess.check_output (["batctl", "meshif", ifaceobj.name, attr_name], stderr = subprocess.STDOUT)
+            return batctl_output.strip()
+        except subprocess.CalledProcessError as c:
+            raise Exception ("Command \"batctl meshif %s %s\" failed: %s" % (ifaceobj.name, attr_name, c.output))
         except ValueError:
             raise Exception ("_read_current_batman_attr: Integer value expected, got: %s" % value)
+        except Exception as e:
+            raise Exception ("_read_current_batman_attr: %s" % e)
+
 
     def _set_batman_attr (self, ifaceobj, attr, value):
         if attr not in self._batman_attrs:
             raise ValueError ("_set_batman_attr: Invalid or unsupported B.A.T.M.A.N. adv. attribute: %s" % attr)
 
-        attr_file_name = self._batman_attrs[attr]['filename']
-        attr_file_path = "/sys/class/net/%s/mesh/%s" % (ifaceobj.name, attr_file_name)
+        attr_name = self._batman_attrs[attr]['name']
+
         try:
-            self.write_file(attr_file_path, "%s\n" % value)
-        except IOError as i:
-            raise Exception ("_set_batman_attr (%s): %s" % (attr, i))
+            self.logger.debug ("Running batctl meshif %s %s %s" % (ifaceobj.name, attr_name, value))
+            utils.exec_commandl(["batctl", "meshif", ifaceobj.name, attr_name, value])
+        except subprocess.CalledProcessError as c:
+            raise Exception ("Command \"batctl meshif %s %s %s\" failed: %s" % (ifaceobj.name, attr_name, c.output))
+        except ValueError:
+            raise Exception ("_set_batman_attr: Integer value expected, got: %s" % value)
+        except Exception as e:
+            raise Exception ("_set_batman_attr: %s" % e)
 
     def _batctl_if (self, bat_iface, mesh_iface, op):
         if op not in [ 'add', 'del' ]:
             raise Exception ("_batctl_if() called with invalid \"op\" value: %s" % op)
 
         try:
-            self.logger.debug ("Running batctl -m %s if %s %s" % (bat_iface, op, mesh_iface))
-            utils.exec_commandl(["batctl", "-m", bat_iface, "if", op, mesh_iface])
+            self.logger.debug ("Running batctl meshif %s if %s %s" % (bat_iface, op, mesh_iface))
+            utils.exec_commandl(["batctl", "meshif", bat_iface, "if", op, mesh_iface])
         except subprocess.CalledProcessError as c:
-            raise Exception ("Command \"batctl -m %s if %s %s\" failed: %s" % (bat_iface, op, mesh_iface, c.output))
+            raise Exception ("Command \"batctl meshif %s if %s %s\" failed: %s" % (bat_iface, op, mesh_iface, c.output))
         except Exception as e:
             raise Exception ("_batctl_if: %s" % e)
 
@@ -173,7 +203,7 @@ class batman_adv(Addon, moduleBase):
 
         try:
             self.logger.debug ("Running batctl ra %s" % routing_algo)
-            batctl_output = subprocess.check_output (["batctl", "ra", routing_algo], stderr = subprocess.STDOUT)
+            #utils.exec_commandl(["batctl", "ra", routing_algo])
         except subprocess.CalledProcessError as c:
             raise Exception ("Command \"batctl ra %s\" failed: %s" % (routing_algo, c.output))
         except Exception as e:
@@ -182,10 +212,10 @@ class batman_adv(Addon, moduleBase):
     def _find_member_ifaces (self, ifaceobj, ignore = True):
         members = []
         iface_ignore_re = self._get_batman_ifaces_ignore_regex (ifaceobj)
-        self.logger.info("batman: executing: %s" % " ".join(["batctl", "-m", ifaceobj.name, "if"]))
-        batctl_fh = subprocess.Popen (["batctl", "-m", ifaceobj.name, "if"], bufsize = 4194304, stdout = subprocess.PIPE).stdout
+        self.logger.info("batman: executing: %s" % " ".join(["batctl", "meshif", ifaceobj.name, "if"]))
+        batctl_fh = subprocess.Popen (["batctl", "meshif", ifaceobj.name, "if"], bufsize = 4194304, stdout = subprocess.PIPE).stdout
         for line in batctl_fh.readlines ():
-            iface = line.split (':')[0]
+            iface = line.decode().split (':')[0]
             if iface_ignore_re and iface_ignore_re.match (iface) and ignore:
                  continue
 
@@ -206,7 +236,7 @@ class batman_adv(Addon, moduleBase):
 
     def _up (self, ifaceobj):
         if self._get_batman_ifaces (ifaceobj) == None:
-            raise Exception ('could not determine batman interfacaes')
+            raise Exception ('could not determine batman interfaces')
 
         # Verify existance of batman interfaces (should be present already)
         batman_ifaces = []
@@ -221,8 +251,11 @@ class batman_adv(Addon, moduleBase):
             raise Exception ("None of the configured batman interfaces are available!")
 
         routing_algo = ifaceobj.get_attr_value_first ('batman-routing-algo')
-        if routing_algo:
-            self._set_routing_algo (routing_algo)
+
+        if not routing_algo:
+            routing_algo = self.get_attr_default_value ('batman-routing-algo')
+
+        self._set_routing_algo (routing_algo)
 
         if_ignore_re = self._get_batman_ifaces_ignore_regex (ifaceobj)
         # Is the batman main interface already present?
@@ -312,16 +345,6 @@ class batman_adv(Addon, moduleBase):
                 value_ok = 1
 
             ifaceobjcurr.update_config_with_status ('batman-%s' % attr, value_curr, value_ok)
-
-        routing_algo = ifaceobj.get_attr_value_first ('batman-routing-algo')
-        if routing_algo:
-            value_curr = self._read_current_batman_attr (ifaceobj, "routing_algo", dont_map = True)
-
-            value_ok = 0
-            if routing_algo != value_curr:
-                value_ok = 1
-
-            ifaceobjcurr.update_config_with_status ('batman-routing-algo', value_curr, value_ok)
 
     _run_ops = {
         'pre-up': _up,
